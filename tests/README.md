@@ -1,27 +1,27 @@
 # SNIP-36 E2E Test Suite
 
-End-to-end test that validates the full SNIP-36 virtual block pipeline against the Starknet Integration Sepolia test environment.
+End-to-end test that validates the full SNIP-36 virtual block pipeline against the Starknet Integration Sepolia test environment. All tooling is implemented in Rust via the `snip36` CLI.
 
 ## Test Flow
 
 ```
-1. Compile + declare + deploy minimal Cairo counter contract (scarb/sncast)
-2. Invoke increment() to establish on-chain state
-3. Wait for tx inclusion, record block_number + tx_hash
-4. Run virtual OS against block N-1 (pre-execution state) → proof + proof_facts
-5. Validate proof format (base64 check, optional local stwo verification)
-6. Sign tx with proof_facts-inclusive hash and submit to gateway
-7. Assert: tx accepted (TRANSACTION_RECEIVED)
+1. Import funded account into sncast
+2. Compile + declare + deploy minimal Cairo counter contract (scarb/sncast)
+3. Wait for deploy tx inclusion
+4. For each SNOS block:
+   a. Construct and sign an invoke transaction (increment)
+   b. Prove via virtual OS (starknet_os_runner + stwo prover)
+   c. Sign tx with proof_facts-inclusive hash and submit to gateway
+   d. Wait for tx inclusion, verify counter state on-chain
+5. Final counter verification
 ```
 
 ## Prerequisites
 
 - `scarb` — contract compilation
 - `sncast` — starknet-foundry (declare/deploy/invoke)
-- `python3` — transaction signing (starknet-py, poseidon-py required in venv)
-- `curl` + `jq` — RPC calls
-- `./scripts/setup.sh` already run (prover + runner built)
-- `deps/sequencer/` cloned and built at DEMO-19 with `nightly-2025-07-14`
+- `snip36` CLI built (`cargo build --release -p snip36-cli`)
+- `snip36 setup` already run (prover + runner built), or `--prover-url` pointing to a remote prover
 
 ## Environment Variables
 
@@ -30,27 +30,52 @@ End-to-end test that validates the full SNIP-36 virtual block pipeline against t
 | `STARKNET_RPC_URL` | (see .env) | Yes |
 | `STARKNET_ACCOUNT_ADDRESS` | — | Yes |
 | `STARKNET_PRIVATE_KEY` | — | Yes |
+| `STARKNET_CHAIN_ID` | `SN_INTEGRATION_SEPOLIA` | No |
+| `STARKNET_GATEWAY_URL` | `https://privacy-starknet-integration.starknet.io` | No |
 | `PROVER_URL` | — | No (uses local runner if unset) |
 
 ## Running
 
 ```bash
 source .env
-export STARKNET_RPC_URL STARKNET_ACCOUNT_ADDRESS STARKNET_PRIVATE_KEY
+./snip36 e2e
+```
 
-./tests/e2e-test.sh
+With options:
+
+```bash
+./snip36 e2e --prover-url http://remote:9900 --snos-blocks 3 --counter-increments 5
 ```
 
 ## Files
 
 | File | Description |
 |------|-------------|
-| `e2e-test.sh` | Main orchestrator — runs all steps sequentially |
 | `contracts/` | Minimal Cairo counter contract (Scarb project) |
-| `wait-for-tx.sh` | Polls `starknet_getTransactionStatus` until accepted |
-| `submit-proof.sh` | Submits `INVOKE_FUNCTION` with proof to gateway (unsigned, for testing) |
-| `sign-and-submit.py` | Computes proof_facts-inclusive tx hash, signs, and submits to gateway |
-| `convert-proof.py` | Converts cairo-serde proof to base64 packed u32 format (legacy) |
+| `contracts/src/lib.cairo` | Counter contract: `increment(amount)` + `get_counter()` |
+
+The E2E orchestrator and all supporting logic (tx signing, proof submission, tx polling) live in the `snip36` CLI crate:
+
+| Crate | Description |
+|-------|-------------|
+| `crates/snip36-cli/src/commands/e2e.rs` | E2E test orchestrator |
+| `crates/snip36-cli/src/commands/prove.rs` | Virtual OS proving (`snip36 prove virtual-os`) |
+| `crates/snip36-cli/src/commands/submit.rs` | Sign + submit proof to gateway (`snip36 submit`) |
+| `crates/snip36-core/src/signing.rs` | Proof_facts-inclusive Poseidon tx hash + signing |
+| `crates/snip36-core/src/rpc.rs` | Starknet RPC client (tx polling, calls) |
+
+## CLI Commands
+
+```
+snip36 e2e          Full end-to-end test
+snip36 prove        Run virtual OS + stwo prover
+snip36 submit       Sign and submit proof to gateway
+snip36 deploy       Deploy contracts via sncast
+snip36 fund         Transfer STRK from master account
+snip36 extract      Extract virtual OS program
+snip36 health       CI health check
+snip36 setup        Environment setup
+```
 
 ## Proof Format
 
@@ -72,43 +97,16 @@ The `proof_facts` are a JSON array of hex felt values containing:
 
 Proof-bearing transactions require the `proof_facts` to be included in the Poseidon transaction hash chain. Standard Starknet SDKs (starknet-py, starknet.js) do **not** include this, producing an incorrect hash and "invalid signature" errors.
 
-Use `sign-and-submit.py` which computes the correct hash:
+The `snip36` CLI handles this natively via `snip36_core::signing`, which computes the correct hash:
 
 ```bash
-source sequencer_venv/bin/activate
-source .env
-export STARKNET_RPC_URL STARKNET_ACCOUNT_ADDRESS STARKNET_PRIVATE_KEY
-
-python3 tests/sign-and-submit.py \
-    output/e2e/e2e.proof \
-    output/e2e/e2e.proof_facts \
-    "0x1,0xCONTRACT,0xSELECTOR,0x1,0x1" \
-    "0xCONTRACT"
-```
-
-## Individual Script Usage
-
-### wait-for-tx.sh
-
-```bash
-./tests/wait-for-tx.sh --tx-hash 0x123... --rpc-url $RPC --timeout 120
-# Outputs: block number (to stdout)
-```
-
-### submit-proof.sh (unsigned, for testing)
-
-```bash
-./tests/submit-proof.sh \
-    --proof-base64 output/e2e/e2e.proof \
+./snip36 submit \
+    --proof output/e2e/e2e.proof \
     --proof-facts output/e2e/e2e.proof_facts \
-    --sender 0x... \
-    --calldata "0x1,0x...,0x...,0x1,0x1"
-# Exit 0 = success, Exit 69 = INVALID_PROOF
+    --calldata "0x1,0xCONTRACT,0xSELECTOR,0x1,0x1" \
+    --contract-address "0xCONTRACT"
 ```
 
-### sign-and-submit.py (signed, production)
+## CI
 
-```bash
-python3 tests/sign-and-submit.py <proof_b64_file> <proof_facts_file> <calldata_csv> <contract_address>
-# Requires: STARKNET_ACCOUNT_ADDRESS, STARKNET_PRIVATE_KEY env vars
-```
+A daily health check runs via GitHub Actions (`.github/workflows/daily-health.yml`), executing `snip36 health` to verify the integration environment is operational.
