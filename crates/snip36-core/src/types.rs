@@ -25,7 +25,7 @@ impl Default for ResourceBounds {
             },
             l2_gas: ResourceBound {
                 max_amount: 0x7000000,
-                max_price_per_unit: 0x2cb417800,
+                max_price_per_unit: 0x1dcd65000,
             },
             l1_data_gas: ResourceBound {
                 max_amount: 0x1b0,
