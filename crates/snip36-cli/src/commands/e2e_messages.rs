@@ -173,33 +173,59 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
     // ==========================================
     step(2, "Declare Messenger class");
 
-    let declare_output = tokio::process::Command::new("sncast")
-        .args([
-            "--account", account_name,
-            "declare", "--url", &config.rpc_url,
-            "--contract-name", "Messenger",
-        ])
+    // Compute class hash from compiled artifacts first
+    let class_hash_output = tokio::process::Command::new("sncast")
+        .args(["utils", "class-hash", "--contract-name", "Messenger"])
         .current_dir(&contracts_dir)
         .output()
         .await
-        .wrap_err("failed to run sncast declare")?;
+        .wrap_err("failed to compute class hash")?;
 
-    let declare_combined = format_cmd_output(&declare_output);
-    info!("  sncast declare output:");
-    info!("  {declare_combined}");
+    let class_hash_text = format_cmd_output(&class_hash_output);
+    let computed_hash = parse_hex_from_output("class_hash", &class_hash_text)
+        .or_else(|| parse_long_hex(&class_hash_text));
 
-    let class_hash = parse_hex_from_output("class_hash", &declare_combined)
-        .or_else(|| parse_long_hex(&declare_combined));
+    // Check if already declared on-chain
+    let already_declared = if let Some(ref ch) = computed_hash {
+        rpc.get_class(ch).await.is_ok()
+    } else {
+        false
+    };
 
-    let class_hash = match class_hash {
-        Some(h) => {
-            pass("Messenger declared");
-            info!("  Class hash: {h}");
-            h
-        }
-        None => {
-            fail("Could not determine class hash");
-            bail!("declare failed");
+    let class_hash = if already_declared {
+        let h = computed_hash.unwrap();
+        pass("Messenger already declared");
+        info!("  Class hash: {h}");
+        h
+    } else {
+        let declare_output = tokio::process::Command::new("sncast")
+            .args([
+                "--account", account_name,
+                "declare", "--url", &config.rpc_url,
+                "--contract-name", "Messenger",
+            ])
+            .current_dir(&contracts_dir)
+            .output()
+            .await
+            .wrap_err("failed to run sncast declare")?;
+
+        let declare_combined = format_cmd_output(&declare_output);
+        info!("  sncast declare output:");
+        info!("  {declare_combined}");
+
+        let class_hash = parse_hex_from_output("class_hash", &declare_combined)
+            .or_else(|| parse_long_hex(&declare_combined));
+
+        match class_hash {
+            Some(h) => {
+                pass("Messenger declared");
+                info!("  Class hash: {h}");
+                h
+            }
+            None => {
+                fail("Could not determine class hash");
+                bail!("declare failed");
+            }
         }
     };
 
@@ -293,8 +319,11 @@ pub async fn run(args: E2eMessagesArgs, env_file: Option<&std::path::Path>) -> R
     let private_key_felt = felt_from_hex(&config.private_key).map_err(|e| eyre::eyre!(e))?;
     let chain_id = config.chain_id_felt()?;
 
+    // Wait briefly for the RPC node to update the nonce after deploy
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     let nonce = rpc.get_nonce(&config.account_address).await?;
     let nonce_felt = starknet_types_core::felt::Felt::from(nonce);
+    info!("  Using nonce: {nonce} ({:#x})", nonce);
 
     let zero_bounds = ResourceBounds::zero_fee();
     let standard_tx_hash = compute_invoke_v3_tx_hash(
