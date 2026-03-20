@@ -79,9 +79,12 @@ impl StarknetRpc {
             .ok_or_else(|| RpcError::Unexpected(format!("expected string chain id: {result}")))
     }
 
-    /// Get the nonce for a contract address at the pending block.
+    /// Get the nonce for a contract address (tries pre_confirmed, falls back to latest).
     pub async fn get_nonce(&self, address: &str) -> Result<u64, RpcError> {
-        self.get_nonce_at_block(address, serde_json::json!("pending")).await
+        match self.get_nonce_at_block(address, serde_json::json!("pre_confirmed")).await {
+            Ok(n) => Ok(n),
+            Err(_) => self.get_nonce_at_block(address, serde_json::json!("latest")).await,
+        }
     }
 
     /// Get the nonce for a contract address at a specific block.
