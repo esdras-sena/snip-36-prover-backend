@@ -24,3 +24,23 @@ mod Counter {
         }
     }
 }
+
+#[starknet::interface]
+trait IMessenger<TContractState> {
+    fn send_message(ref self: TContractState, to_address: felt252, payload: Span<felt252>);
+}
+
+#[starknet::contract]
+mod Messenger {
+    use starknet::syscalls::send_message_to_l1_syscall;
+
+    #[storage]
+    struct Storage {}
+
+    #[abi(embed_v0)]
+    impl MessengerImpl of super::IMessenger<ContractState> {
+        fn send_message(ref self: ContractState, to_address: felt252, payload: Span<felt252>) {
+            send_message_to_l1_syscall(to_address, payload).unwrap();
+        }
+    }
+}

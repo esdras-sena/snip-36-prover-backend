@@ -162,5 +162,9 @@ pub const GET_COUNTER_SELECTOR: &str =
 pub const BALANCE_OF_SELECTOR: &str =
     "0x35a73cd311a05d46deda634c5ee045db92f811b4e74bca4437fcb5302b7af33";
 
+/// Selector for `send_message(to_address, payload)`.
+pub const SEND_MESSAGE_SELECTOR: &str =
+    "0x12ead94ae9d3f9d2bdb6b847cf255f1f398193a1f88884a0ae8e18f24a037b6";
+
 /// Default gateway URL for SNIP-36 proof submission.
 pub const DEFAULT_GATEWAY_URL: &str = "https://privacy-starknet-integration.starknet.io";

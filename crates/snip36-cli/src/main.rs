@@ -43,6 +43,8 @@ enum Commands {
     Setup(commands::setup::SetupArgs),
     /// Full end-to-end test
     E2e(commands::e2e::E2eArgs),
+    /// E2E test for L2→L1 messages (raw_messages.json)
+    E2eMessages(commands::e2e_messages::E2eMessagesArgs),
 }
 
 #[tokio::main]
@@ -74,5 +76,6 @@ async fn main() -> Result<()> {
         Commands::Health(args) => commands::health::run(args, env_file).await,
         Commands::Setup(args) => commands::setup::run(args, env_file).await,
         Commands::E2e(args) => commands::e2e::run(args, env_file).await,
+        Commands::E2eMessages(args) => commands::e2e_messages::run(args, env_file).await,
     }
 }
