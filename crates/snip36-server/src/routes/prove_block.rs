@@ -13,7 +13,9 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::receipt_block_number;
-use snip36_core::signing::{compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload};
+use snip36_core::signing::{
+    compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
+};
 use snip36_core::types::{ResourceBounds, SubmitParams, INCREMENT_SELECTOR, STRK_TOKEN};
 use starknet_types_core::felt::Felt;
 
@@ -75,7 +77,7 @@ pub fn find_snip36_bin() -> PathBuf {
 /// GET /api/prove-block/{session_id}?increment_amount=1&increments_per_block=1
 ///
 /// Full SNIP-36 cycle: construct tx off-chain -> prove in virtual OS -> submit
-/// to gateway -> wait for inclusion -> verify counter. Streams progress via SSE.
+/// via RPC -> wait for inclusion -> verify counter. Streams progress via SSE.
 pub async fn prove_block(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
@@ -103,9 +105,7 @@ pub async fn prove_block(
             let event = event.to_string();
             let data = data.to_string();
             async move {
-                let _ = tx
-                    .send(Ok(Event::default().event(event).data(data)))
-                    .await;
+                let _ = tx.send(Ok(Event::default().event(event).data(data))).await;
             }
         };
 
@@ -119,8 +119,7 @@ pub async fn prove_block(
             }
         };
 
-        let expected_increment =
-            increment_amount * increments_per_block as u64;
+        let expected_increment = increment_amount * increments_per_block as u64;
 
         send(
             "log",
@@ -135,8 +134,7 @@ pub async fn prove_block(
         send("phase", "constructing").await;
 
         // Build multicall calldata
-        let mut calldata_strs: Vec<String> =
-            vec![format!("{:#x}", increments_per_block)];
+        let mut calldata_strs: Vec<String> = vec![format!("{:#x}", increments_per_block)];
         for _ in 0..increments_per_block {
             calldata_strs.push(contract_address.clone());
             calldata_strs.push(INCREMENT_SELECTOR.to_string());
@@ -191,7 +189,11 @@ pub async fn prove_block(
         {
             Ok(n) => n,
             Err(e) => {
-                send("error", &format!("Failed to get nonce at block {reference_block}: {e}")).await;
+                send(
+                    "error",
+                    &format!("Failed to get nonce at block {reference_block}: {e}"),
+                )
+                .await;
                 return;
             }
         };
@@ -250,9 +252,7 @@ pub async fn prove_block(
 
         send(
             "log",
-            &format!(
-                "Transaction constructed (nonce: {nonce}, ref block: {reference_block})"
-            ),
+            &format!("Transaction constructed (nonce: {nonce}, ref block: {reference_block})"),
         )
         .await;
 
@@ -301,10 +301,7 @@ pub async fn prove_block(
             Err(e) => {
                 send(
                     "error",
-                    &format!(
-                        "Failed to spawn prover ({}): {e}",
-                        snip36_bin.display()
-                    ),
+                    &format!("Failed to spawn prover ({}): {e}", snip36_bin.display()),
                 )
                 .await;
                 return;
@@ -358,11 +355,7 @@ pub async fn prove_block(
             .await
             .map(|m| m.len())
             .unwrap_or(0);
-        send(
-            "log",
-            &format!("Proof generated ({} bytes)", proof_size),
-        )
-        .await;
+        send("log", &format!("Proof generated ({} bytes)", proof_size)).await;
 
         // Check for L2→L1 messages
         let messages_file = proof_path.with_extension("raw_messages.json");
@@ -374,7 +367,7 @@ pub async fn prove_block(
             .await;
         }
 
-        // ── Phase 3: Submit to gateway ──────────────────────
+        // ── Phase 3: Submit via RPC ──────────────────────
         send("phase", "submitting").await;
 
         let proof_b64 = match tokio::fs::read_to_string(&proof_path).await {
@@ -423,10 +416,9 @@ pub async fn prove_block(
             nonce: nonce_felt,
             chain_id,
             resource_bounds: ResourceBounds::default(),
-            gateway_url: state.config.gateway_url.clone(),
         };
 
-        let (gw_tx_hash, payload) = match sign_and_build_payload(&params) {
+        let (local_tx_hash, invoke_tx) = match sign_and_build_payload(&params) {
             Ok(r) => r,
             Err(e) => {
                 send("error", &format!("SNIP-36 signing failed: {e}")).await;
@@ -434,113 +426,60 @@ pub async fn prove_block(
             }
         };
 
-        let gw_tx_hash_hex = format!("{:#x}", gw_tx_hash);
-        let submit_url = format!(
-            "{}/gateway/add_transaction",
-            state.config.gateway_url.trim_end_matches('/')
-        );
+        let local_tx_hash_hex = format!("{:#x}", local_tx_hash);
 
         send(
             "log",
-            &format!("Submitting tx {} to gateway...", gw_tx_hash_hex.get(..18).unwrap_or(&gw_tx_hash_hex)),
+            &format!(
+                "Submitting tx {} via RPC...",
+                local_tx_hash_hex.get(..18).unwrap_or(&local_tx_hash_hex)
+            ),
         )
         .await;
 
-        let client = reqwest::Client::new();
         let max_attempts = 20;
-        let mut accepted = false;
+        let mut rpc_tx_hash = None;
 
         for attempt in 1..=max_attempts {
-            let response = client
-                .post(&submit_url)
-                .header("Content-Type", "application/json")
-                .json(&payload)
-                .timeout(std::time::Duration::from_secs(120))
-                .send()
-                .await;
-
-            match response {
-                Ok(resp) => {
-                    let status = resp.status();
-                    let resp_text = match resp.text().await {
-                        Ok(t) => t,
-                        Err(e) => {
-                            send("error", &format!("Failed to read gateway response: {e}")).await;
-                            return;
-                        }
-                    };
-
-                    let body: serde_json::Value =
-                        serde_json::from_str(&resp_text).unwrap_or_default();
-                    let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
-                    let msg = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
-
-                    // Surface non-2xx HTTP errors that aren't retryable
-                    if status.is_server_error() && attempt < max_attempts {
-                        send(
-                            "log",
-                            &format!(
-                                "Gateway HTTP {status} (attempt {attempt}/{max_attempts}), retrying..."
-                            ),
-                        )
-                        .await;
-                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                        continue;
-                    } else if status.is_client_error() && code.is_empty() {
-                        send(
-                            "error",
-                            &format!("Gateway HTTP {status}: {resp_text}"),
-                        )
-                        .await;
-                        return;
-                    }
-
-                    if code == "TRANSACTION_RECEIVED" {
-                        send(
-                            "log",
-                            &format!("Gateway accepted (attempt {attempt}/{max_attempts})"),
-                        )
-                        .await;
-                        accepted = true;
-                        break;
-                    } else if (msg.contains("too recent")
-                        || msg.contains("stored block hash: 0"))
-                        && attempt < max_attempts
-                    {
-                        send(
-                            "log",
-                            &format!(
-                                "Gateway not ready (attempt {attempt}/{max_attempts}), waiting 10s..."
-                            ),
-                        )
-                        .await;
-                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                    } else {
-                        send(
-                            "error",
-                            &format!("Gateway rejected: {}", body),
-                        )
-                        .await;
-                        return;
-                    }
+            match state.rpc.add_invoke_transaction(invoke_tx.clone()).await {
+                Ok(accepted_tx_hash) => {
+                    send(
+                        "log",
+                        &format!(
+                            "RPC accepted (attempt {attempt}/{max_attempts}): {accepted_tx_hash}"
+                        ),
+                    )
+                    .await;
+                    rpc_tx_hash = Some(accepted_tx_hash);
+                    break;
+                }
+                Err(snip36_core::rpc::RpcError::JsonRpc(msg)) if attempt < max_attempts => {
+                    send(
+                        "log",
+                        &format!(
+                            "RPC error (attempt {attempt}/{max_attempts}), waiting 10s... ({msg})"
+                        ),
+                    )
+                    .await;
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 }
                 Err(e) => {
-                    send("error", &format!("Gateway request failed: {e}")).await;
+                    send("error", &format!("RPC submission failed: {e}")).await;
                     return;
                 }
             }
         }
 
-        if !accepted {
-            send("error", "Gateway did not accept after all retries").await;
+        let Some(rpc_tx_hash) = rpc_tx_hash else {
+            send("error", "RPC did not accept after all retries").await;
             return;
-        }
+        };
 
         // ── Phase 4: Wait for inclusion and verify ──────────
         send("phase", "verifying").await;
         send("log", "Waiting for tx inclusion...").await;
 
-        match state.rpc.wait_for_tx(&gw_tx_hash_hex, 180, 5).await {
+        match state.rpc.wait_for_tx(&rpc_tx_hash, 180, 5).await {
             Ok(receipt) => {
                 let bn = receipt_block_number(&receipt).unwrap_or(0);
                 send("log", &format!("Tx included in block {bn}")).await;
@@ -573,16 +512,12 @@ pub async fn prove_block(
             Err(_) => 0,
         };
 
-        send(
-            "log",
-            &format!("Counter value: {counter_value}"),
-        )
-        .await;
+        send("log", &format!("Counter value: {counter_value}")).await;
 
         send_json(
             "complete",
             serde_json::json!({
-                "tx_hash": gw_tx_hash_hex,
+                "tx_hash": rpc_tx_hash,
                 "counter_value": counter_value,
                 "proof_size": proof_size,
                 "increment": expected_increment,

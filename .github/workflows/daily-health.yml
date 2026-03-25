@@ -1,4 +1,4 @@
-name: Daily Integration Health Check
+name: Daily Sepolia Health Check
 
 on:
   schedule:
@@ -7,8 +7,8 @@ on:
 
 # Version pins — bump these to force a rebuild of cached deps.
 env:
-  SEQUENCER_TAG: PRIVACY-0.14.2-RC.1
-  PROVING_UTILS_REV: 6f12ca27
+  SEQUENCER_TAG: PRIVACY-0.14.2-RC.2
+  PROVING_UTILS_REV: dbc39e74
   STWO_NIGHTLY: nightly-2025-07-14
 
 jobs:
@@ -82,4 +82,5 @@ jobs:
           STARKNET_RPC_URL: ${{ secrets.STARKNET_RPC_URL }}
           STARKNET_ACCOUNT_ADDRESS: ${{ secrets.STARKNET_ACCOUNT_ADDRESS }}
           STARKNET_PRIVATE_KEY: ${{ secrets.STARKNET_PRIVATE_KEY }}
+          STARKNET_GATEWAY_URL: ${{ secrets.STARKNET_GATEWAY_URL }}
         run: ./snip36 e2e

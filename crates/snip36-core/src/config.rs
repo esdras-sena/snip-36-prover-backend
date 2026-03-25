@@ -1,7 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use crate::types::DEFAULT_GATEWAY_URL;
-
 /// Typed configuration loaded from environment variables / .env file.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -11,10 +9,10 @@ pub struct Config {
     pub account_address: String,
     /// Private key for signing (hex).
     pub private_key: String,
-    /// Starknet chain ID string (e.g. "SN_INTEGRATION_SEPOLIA").
+    /// Starknet chain ID string (e.g. "SN_SEPOLIA").
     pub chain_id: String,
-    /// Privacy gateway URL for proof submission.
-    pub gateway_url: String,
+    /// Gateway URL for proof submission (bypasses RPC node).
+    pub gateway_url: Option<String>,
     /// Project root directory.
     pub project_dir: PathBuf,
     /// Output directory for proofs and artifacts.
@@ -45,11 +43,10 @@ impl Config {
             .or_else(|_| std::env::var("MASTER_PRIVATE_KEY"))
             .map_err(|_| ConfigError::Missing("STARKNET_PRIVATE_KEY"))?;
         let chain_id =
-            std::env::var("STARKNET_CHAIN_ID").unwrap_or_else(|_| "SN_INTEGRATION_SEPOLIA".into());
+            std::env::var("STARKNET_CHAIN_ID").unwrap_or_else(|_| "SN_SEPOLIA".into());
         let gateway_url = std::env::var("STARKNET_GATEWAY_URL")
             .ok()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_GATEWAY_URL.into());
+            .filter(|s| !s.is_empty());
 
         let project_dir = std::env::var("SNIP36_PROJECT_DIR")
             .map(PathBuf::from)

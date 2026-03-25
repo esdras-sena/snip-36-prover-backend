@@ -9,7 +9,9 @@ use tracing::{error, info};
 
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::StarknetRpc;
-use snip36_core::signing::{compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload};
+use snip36_core::signing::{
+    compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
+};
 use snip36_core::types::{ResourceBounds, SubmitParams, GET_COUNTER_SELECTOR, STRK_TOKEN};
 use snip36_core::Config;
 
@@ -93,7 +95,7 @@ pub struct E2eArgs {
     #[arg(long, default_value = "1")]
     increments_per_snos: u32,
 
-    /// Stop after proving — save proof and proof_facts locally without submitting to the gateway
+    /// Stop after proving — save proof and proof_facts locally without submitting via RPC
     #[arg(long)]
     prove_only: bool,
 }
@@ -104,8 +106,12 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     // Reset counters
     PASS_COUNT.store(0, Ordering::Relaxed);
     FAIL_COUNT.store(0, Ordering::Relaxed);
-    if let Ok(mut t) = STEP_TIMINGS.lock() { t.clear(); }
-    if let Ok(mut s) = STEP_START.lock() { *s = None; }
+    if let Ok(mut t) = STEP_TIMINGS.lock() {
+        t.clear();
+    }
+    if let Ok(mut s) = STEP_START.lock() {
+        *s = None;
+    }
     let e2e_start = Instant::now();
 
     let rpc = StarknetRpc::new(&config.rpc_url);
@@ -118,8 +124,10 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     info!("");
     info!("  RPC:     {}", config.rpc_url);
     info!("  Account: {}", config.account_address);
-    info!("  Blocks:  {} × {} calls × increment({}) = +{} total",
-        args.snos_blocks, args.increments_per_snos, args.counter_increments, total_expected);
+    info!(
+        "  Blocks:  {} × {} calls × increment({}) = +{} total",
+        args.snos_blocks, args.increments_per_snos, args.counter_increments, total_expected
+    );
     info!("");
 
     // Check prerequisites
@@ -176,7 +184,10 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
         pass("Contract compiled");
     } else {
         let out = format_cmd_output(&build);
-        fail(&format!("Contract compilation failed: {}", &out[..out.len().min(500)]));
+        fail(&format!(
+            "Contract compilation failed: {}",
+            &out[..out.len().min(500)]
+        ));
         bail!("compilation failed");
     }
 
@@ -207,10 +218,19 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     let class_hash = parse_hex_from_output("class_hash", &declare_combined)
         .or_else(|| parse_long_hex(&declare_combined));
 
+    let declare_tx_hash = parse_hex_from_output("transaction_hash", &declare_combined);
+
     let class_hash = match class_hash {
         Some(h) => {
             pass("Contract declared");
             info!("  Class hash: {h}");
+            // Wait for declare tx to land before deploying
+            if let Some(tx) = &declare_tx_hash {
+                info!("  Waiting for declare tx inclusion...");
+                rpc.wait_for_tx(tx, 120, 3)
+                    .await
+                    .wrap_err("declare tx not confirmed")?;
+            }
             h
         }
         None => {
@@ -289,8 +309,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
     // Proving loop: construct, prove, submit, verify for each block
     // ==========================================
 
-    let increment_selector =
-        "0x7a44dde9fea32737a5cf3f9683b3235138654aa2d189f6fe44af37a61dc60d";
+    let increment_selector = "0x7a44dde9fea32737a5cf3f9683b3235138654aa2d189f6fe44af37a61dc60d";
 
     // Build multicall calldata (reused for every block)
     let calldata: Vec<String> = {
@@ -321,9 +340,8 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
         bail!("no prover available");
     }
 
-    let current_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("snip36"));
     let client = reqwest::Client::new();
-
+    let current_exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("snip36"));
     // Read initial counter value
     let initial_counter = read_counter(&rpc, &contract_address).await.unwrap_or(0);
     info!("  Initial counter: {initial_counter}");
@@ -342,7 +360,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
         let nonce = rpc.get_nonce(&config.account_address).await?;
         let nonce_felt = starknet_types_core::felt::Felt::from(nonce);
 
-        // For VOS proving, use zero resource bounds (fees handled by gateway submission)
+        // For VOS proving, use zero resource bounds (fees handled by RPC submission)
         let zero_bounds = ResourceBounds::zero_fee();
         let standard_tx_hash = compute_invoke_v3_tx_hash(
             sender_felt,
@@ -379,7 +397,10 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
         let tx_path = args.output_dir.join(format!("e2e_tx_{block_idx}.json"));
         tokio::fs::write(&tx_path, serde_json::to_string_pretty(&tx_json)?).await?;
 
-        info!("  Nonce: {nonce}, ref block: {reference_block}, tx: {:#x}", standard_tx_hash);
+        info!(
+            "  Nonce: {nonce}, ref block: {reference_block}, tx: {:#x}",
+            standard_tx_hash
+        );
         pass("Transaction constructed and signed");
 
         // --- Prove in virtual OS ---
@@ -424,7 +445,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
         if args.prove_only {
             let proof_facts_file = proof_path.with_extension("proof_facts");
             let messages_file = proof_path.with_extension("raw_messages.json");
-            info!("  --prove-only: skipping gateway submission");
+            info!("  --prove-only: skipping RPC submission");
             info!("  Proof:       {}", proof_path.display());
             info!("  Proof facts: {}", proof_facts_file.display());
             if messages_file.exists() {
@@ -441,7 +462,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             bail!("empty proof for block {block_idx}");
         }
 
-        // --- Submit to gateway ---
+        // --- Submit via RPC ---
         let proof_facts_file = proof_path.with_extension("proof_facts");
         let proof_b64_trimmed = proof_b64.trim().to_string();
         let proof_facts_str = tokio::fs::read_to_string(&proof_facts_file)
@@ -463,69 +484,109 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             nonce: nonce_felt,
             chain_id,
             resource_bounds: ResourceBounds::default(),
-            gateway_url: config.gateway_url.clone(),
         };
 
-        let (tx_hash, payload) =
+        let (local_tx_hash, invoke_tx) =
             sign_and_build_payload(&params).map_err(|e| eyre::eyre!("signing failed: {e}"))?;
-
-        let submit_url = format!("{}/gateway/add_transaction", config.gateway_url);
-        info!("  Submitting tx {:#x} to gateway...", tx_hash);
-        info!("  Proof block: {reference_block} (gateway may lag — will retry if needed)");
+        let local_tx_hash_hex = format!("{:#x}", local_tx_hash);
 
         let max_attempts = 20;
-        let mut accepted = false;
+        let mut accepted_tx_hash: Option<String> = None;
         let fails_before = FAIL_COUNT.load(Ordering::Relaxed);
 
-        for attempt in 1..=max_attempts {
-            let response = client
-                .post(&submit_url)
-                .header("Content-Type", "application/json")
-                .json(&payload)
-                .timeout(std::time::Duration::from_secs(120))
-                .send()
-                .await;
+        if let Some(ref gw_url) = config.gateway_url {
+            // --- Submit via gateway (bypasses RPC node proof deserialization) ---
+            let submit_url = format!("{}/gateway/add_transaction", gw_url.trim_end_matches('/'));
+            info!("  Submitting tx {local_tx_hash_hex} via gateway...");
+            info!("  Proof block: {reference_block}");
 
-            match response {
-                Ok(resp) => {
-                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
-                    let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
-                    let msg = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            // Gateway uses INVOKE_FUNCTION and uppercase resource bounds keys
+            let mut gw_tx = invoke_tx.clone();
+            gw_tx["type"] = serde_json::json!("INVOKE_FUNCTION");
+            if let Some(rb) = gw_tx.get("resource_bounds").cloned() {
+                let mut upper = serde_json::Map::new();
+                for (k, v) in rb.as_object().into_iter().flatten() {
+                    upper.insert(k.to_uppercase(), v.clone());
+                }
+                gw_tx["resource_bounds"] = serde_json::Value::Object(upper);
+            }
 
-                    if code == "TRANSACTION_RECEIVED" {
-                        pass(&format!("Gateway accepted (attempt {attempt}/{max_attempts})"));
-                        accepted = true;
+            for attempt in 1..=max_attempts {
+                let response = client
+                    .post(&submit_url)
+                    .header("Content-Type", "application/json")
+                    .json(&gw_tx)
+                    .timeout(std::time::Duration::from_secs(120))
+                    .send()
+                    .await;
+
+                match response {
+                    Ok(resp) => {
+                        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                        let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                        let msg = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
+
+                        if code == "TRANSACTION_RECEIVED" {
+                            pass(&format!("Gateway accepted (attempt {attempt}/{max_attempts})"));
+                            accepted_tx_hash = Some(local_tx_hash_hex.clone());
+                            break;
+                        } else if (msg.contains("too recent") || msg.contains("stored block hash: 0"))
+                            && attempt < max_attempts
+                        {
+                            info!("  Attempt {attempt}/{max_attempts}: gateway not ready, waiting 10s...");
+                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                        } else {
+                            fail(&format!("Gateway rejected: {body}"));
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        if attempt < max_attempts {
+                            info!("  Attempt {attempt}/{max_attempts}: request failed ({e}), retrying...");
+                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                        } else {
+                            fail(&format!("Gateway request failed: {e}"));
+                        }
+                    }
+                }
+            }
+        } else {
+            // --- Submit via RPC ---
+            info!("  Submitting tx {local_tx_hash_hex} via RPC...");
+            info!("  Proof block: {reference_block}");
+
+            for attempt in 1..=max_attempts {
+                match rpc.add_invoke_transaction(invoke_tx.clone()).await {
+                    Ok(hash) => {
+                        pass(&format!(
+                            "RPC accepted (attempt {attempt}/{max_attempts}): {hash}"
+                        ));
+                        accepted_tx_hash = Some(hash);
                         break;
-                    } else if (msg.contains("too recent") || msg.contains("stored block hash: 0"))
-                        && attempt < max_attempts
-                    {
-                        info!("  Attempt {attempt}/{max_attempts}: gateway not ready, waiting 10s...");
+                    }
+                    Err(snip36_core::rpc::RpcError::JsonRpc(msg)) if attempt < max_attempts => {
+                        info!("  Attempt {attempt}/{max_attempts}: RPC error, waiting 10s... ({msg})");
                         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                    } else {
-                        info!("  Response: {}", serde_json::to_string_pretty(&body)?);
-                        fail(&format!("Gateway rejected: code={code}"));
+                    }
+                    Err(e) => {
+                        fail(&format!("RPC submission failed: {e}"));
                         break;
                     }
                 }
-                Err(e) => {
-                    fail(&format!("Gateway request failed: {e}"));
-                    break;
-                }
             }
         }
 
-        if !accepted {
+        let Some(rpc_tx_hash) = accepted_tx_hash else {
             if FAIL_COUNT.load(Ordering::Relaxed) == fails_before {
-                fail("Gateway did not accept after all retries");
+                fail("Submission not accepted after all retries");
             }
-            bail!("gateway submission failed for block {block_idx}");
-        }
+            bail!("RPC submission failed for block {block_idx}");
+        };
 
         // --- Wait for tx inclusion and verify counter ---
-        let tx_hash_hex = format!("{:#x}", tx_hash);
-        info!("  Waiting for tx {tx_hash_hex} to be included...");
+        info!("  Waiting for tx {rpc_tx_hash} to be included...");
 
-        match rpc.wait_for_tx(&tx_hash_hex, 180, 5).await {
+        match rpc.wait_for_tx(&rpc_tx_hash, 180, 5).await {
             Ok(receipt) => {
                 let bn = snip36_core::rpc::receipt_block_number(&receipt).unwrap_or(0);
                 info!("  Tx included in block {bn}");
@@ -545,7 +606,9 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
                 pass(&format!("Counter verified: {actual} (expected {expected})"));
             }
             Some(actual) => {
-                fail(&format!("Counter mismatch: got {actual}, expected {expected}"));
+                fail(&format!(
+                    "Counter mismatch: got {actual}, expected {expected}"
+                ));
                 bail!("counter verification failed for block {block_idx}");
             }
             None => {

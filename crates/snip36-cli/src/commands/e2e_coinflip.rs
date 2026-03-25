@@ -10,7 +10,9 @@ use tracing::{error, info};
 
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::StarknetRpc;
-use snip36_core::signing::{compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload};
+use snip36_core::signing::{
+    compute_invoke_v3_tx_hash, felt_from_hex, sign, sign_and_build_payload,
+};
 use snip36_core::types::{ResourceBounds, SubmitParams, PLAY_SELECTOR, STRK_TOKEN};
 use snip36_core::Config;
 
@@ -95,8 +97,12 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
 
     PASS_COUNT.store(0, Ordering::Relaxed);
     FAIL_COUNT.store(0, Ordering::Relaxed);
-    if let Ok(mut t) = STEP_TIMINGS.lock() { t.clear(); }
-    if let Ok(mut s) = STEP_START.lock() { *s = None; }
+    if let Ok(mut t) = STEP_TIMINGS.lock() {
+        t.clear();
+    }
+    if let Ok(mut s) = STEP_START.lock() {
+        *s = None;
+    }
     let e2e_start = Instant::now();
 
     let rpc = StarknetRpc::new(&config.rpc_url);
@@ -107,7 +113,11 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
     info!("");
     info!("  RPC:     {}", config.rpc_url);
     info!("  Account: {}", config.account_address);
-    info!("  Bet:     {} ({})", bet, if bet == 0 { "heads" } else { "tails" });
+    info!(
+        "  Bet:     {} ({})",
+        bet,
+        if bet == 0 { "heads" } else { "tails" }
+    );
     info!("");
 
     check_prereqs(&config).await?;
@@ -120,11 +130,18 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
 
     let _ = tokio::process::Command::new("sncast")
         .args([
-            "account", "import", "--name", account_name,
-            "--address", &config.account_address,
-            "--private-key", &config.private_key,
-            "--type", "oz",
-            "--url", &config.rpc_url,
+            "account",
+            "import",
+            "--name",
+            account_name,
+            "--address",
+            &config.account_address,
+            "--private-key",
+            &config.private_key,
+            "--type",
+            "oz",
+            "--url",
+            &config.rpc_url,
             "--silent",
         ])
         .output()
@@ -155,7 +172,10 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
         pass("Contract compiled");
     } else {
         let out = format_cmd_output(&build);
-        fail(&format!("Compilation failed: {}", &out[..out.len().min(500)]));
+        fail(&format!(
+            "Compilation failed: {}",
+            &out[..out.len().min(500)]
+        ));
         bail!("compilation failed");
     }
 
@@ -189,9 +209,13 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
     } else {
         let declare_output = tokio::process::Command::new("sncast")
             .args([
-                "--account", account_name,
-                "declare", "--url", &config.rpc_url,
-                "--contract-name", "CoinFlip",
+                "--account",
+                account_name,
+                "declare",
+                "--url",
+                &config.rpc_url,
+                "--contract-name",
+                "CoinFlip",
             ])
             .current_dir(&contracts_dir)
             .output()
@@ -214,7 +238,8 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
                 // Wait for declare tx to land before deploying
                 if let Some(tx) = &declare_tx {
                     info!("  Waiting for declare tx inclusion...");
-                    rpc.wait_for_tx(tx, 120, 3).await
+                    rpc.wait_for_tx(tx, 120, 3)
+                        .await
                         .wrap_err("declare tx not confirmed")?;
                 }
                 h
@@ -234,10 +259,15 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
     let salt = format!("0x{}", hex::encode(rand::random::<[u8; 16]>()));
     let deploy_output = tokio::process::Command::new("sncast")
         .args([
-            "--account", account_name,
-            "deploy", "--url", &config.rpc_url,
-            "--class-hash", &class_hash,
-            "--salt", &salt,
+            "--account",
+            account_name,
+            "deploy",
+            "--url",
+            &config.rpc_url,
+            "--class-hash",
+            &class_hash,
+            "--salt",
+            &salt,
         ])
         .output()
         .await
@@ -300,7 +330,10 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
     info!("  Game parameters:");
     info!("    seed (block#): {seed}");
     info!("    player:        {player}");
-    info!("    bet:           {bet_hex} ({})", if bet == 0 { "heads" } else { "tails" });
+    info!(
+        "    bet:           {bet_hex} ({})",
+        if bet == 0 { "heads" } else { "tails" }
+    );
 
     // Compute expected outcome client-side for verification later
     let seed_felt = Felt::from(reference_block);
@@ -309,21 +342,26 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
     let hash_bytes = expected_hash.to_bytes_be();
     let expected_outcome = hash_bytes[31] & 1; // LSB
     let expected_won = if expected_outcome == bet { 1u8 } else { 0u8 };
-    info!("  Expected outcome: {} ({}) => {}",
+    info!(
+        "  Expected outcome: {} ({}) => {}",
         expected_outcome,
-        if expected_outcome == 0 { "heads" } else { "tails" },
+        if expected_outcome == 0 {
+            "heads"
+        } else {
+            "tails"
+        },
         if expected_won == 1 { "WIN" } else { "LOSE" },
     );
 
     // Build multicall calldata: 1 call to play(seed, player, bet)
     let calldata: Vec<String> = vec![
-        "0x1".to_string(),          // 1 call
-        contract_address.clone(),   // target
-        PLAY_SELECTOR.to_string(),  // selector
-        "0x3".to_string(),          // calldata length (3 felts)
-        seed.clone(),               // seed
-        player.clone(),             // player
-        bet_hex.clone(),            // bet
+        "0x1".to_string(),         // 1 call
+        contract_address.clone(),  // target
+        PLAY_SELECTOR.to_string(), // selector
+        "0x3".to_string(),         // calldata length (3 felts)
+        seed.clone(),              // seed
+        player.clone(),            // player
+        bet_hex.clone(),           // bet
     ];
 
     let calldata_felts: Vec<Felt> = calldata
@@ -354,8 +392,8 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
         &[],
     );
 
-    let sig = sign(private_key_felt, standard_tx_hash)
-        .map_err(|e| eyre::eyre!("signing failed: {e}"))?;
+    let sig =
+        sign(private_key_felt, standard_tx_hash).map_err(|e| eyre::eyre!("signing failed: {e}"))?;
 
     let tx_json = serde_json::json!({
         "type": "INVOKE",
@@ -432,8 +470,8 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
     let messages_str = tokio::fs::read_to_string(&messages_file)
         .await
         .wrap_err("failed to read raw_messages.json")?;
-    let messages_json: serde_json::Value = serde_json::from_str(&messages_str)
-        .wrap_err("invalid JSON in raw_messages.json")?;
+    let messages_json: serde_json::Value =
+        serde_json::from_str(&messages_str).wrap_err("invalid JSON in raw_messages.json")?;
 
     let l2_to_l1 = messages_json
         .get("l2_to_l1_messages")
@@ -445,7 +483,8 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
             let payload = msg.get("payload").and_then(|v| v.as_array());
 
             if let Some(p) = payload {
-                let fields: Vec<String> = p.iter()
+                let fields: Vec<String> = p
+                    .iter()
                     .filter_map(|v| v.as_str().map(|s| s.to_string()))
                     .collect();
 
@@ -454,12 +493,21 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
                     info!("  Settlement receipt:");
                     info!("    player:  {}", fields[0]);
                     info!("    seed:    {}", fields[1]);
-                    info!("    bet:     {} ({})", fields[2],
-                        if fields[2] == "0x0" { "heads" } else { "tails" });
-                    info!("    outcome: {} ({})", fields[3],
-                        if fields[3] == "0x0" { "heads" } else { "tails" });
-                    info!("    won:     {} ({})", fields[4],
-                        if fields[4] == "0x1" { "WIN" } else { "LOSE" });
+                    info!(
+                        "    bet:     {} ({})",
+                        fields[2],
+                        if fields[2] == "0x0" { "heads" } else { "tails" }
+                    );
+                    info!(
+                        "    outcome: {} ({})",
+                        fields[3],
+                        if fields[3] == "0x0" { "heads" } else { "tails" }
+                    );
+                    info!(
+                        "    won:     {} ({})",
+                        fields[4],
+                        if fields[4] == "0x1" { "WIN" } else { "LOSE" }
+                    );
 
                     // Verify outcome matches client-side computation
                     let msg_outcome = if fields[3] == "0x0" { 0u8 } else { 1u8 };
@@ -476,7 +524,11 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
                     if msg_won == expected_won {
                         pass(&format!(
                             "Game result verified: {}",
-                            if msg_won == 1 { "PLAYER WINS" } else { "HOUSE WINS" },
+                            if msg_won == 1 {
+                                "PLAYER WINS"
+                            } else {
+                                "HOUSE WINS"
+                            },
                         ));
                     } else {
                         fail("Win/loss mismatch");
@@ -497,14 +549,14 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
     // --- If prove-only, skip submission ---
     if args.prove_only {
         let proof_facts_file = proof_path.with_extension("proof_facts");
-        info!("  --prove-only: skipping gateway submission");
+        info!("  --prove-only: skipping RPC submission");
         info!("  Proof:       {}", proof_path.display());
         info!("  Proof facts: {}", proof_facts_file.display());
         info!("  Messages:    {}", messages_file.display());
         pass("All artifacts saved locally");
     } else {
-        // --- Submit to gateway ---
-        step(7, "Submit to gateway");
+        // --- Submit via RPC ---
+        step(7, "Submit via RPC");
 
         let proof_b64 = tokio::fs::read_to_string(&proof_path).await?;
         if proof_b64.trim().is_empty() {
@@ -533,64 +585,44 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
             nonce: nonce_felt,
             chain_id,
             resource_bounds: ResourceBounds::default(),
-            gateway_url: config.gateway_url.clone(),
         };
 
-        let (tx_hash, payload) =
+        let (local_tx_hash, invoke_tx) =
             sign_and_build_payload(&params).map_err(|e| eyre::eyre!("signing failed: {e}"))?;
+        let local_tx_hash_hex = format!("{:#x}", local_tx_hash);
 
-        let submit_url = format!("{}/gateway/add_transaction", config.gateway_url);
-        info!("  Submitting tx {:#x} to gateway...", tx_hash);
+        info!("  Submitting tx {local_tx_hash_hex} via RPC...");
 
-        let client = reqwest::Client::new();
         let max_attempts = 20;
-        let mut accepted = false;
+        let mut rpc_tx_hash = None;
 
         for attempt in 1..=max_attempts {
-            let response = client
-                .post(&submit_url)
-                .header("Content-Type", "application/json")
-                .json(&payload)
-                .timeout(std::time::Duration::from_secs(120))
-                .send()
-                .await;
-
-            match response {
-                Ok(resp) => {
-                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
-                    let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
-                    let msg = body.get("message").and_then(|v| v.as_str()).unwrap_or("");
-
-                    if code == "TRANSACTION_RECEIVED" {
-                        pass(&format!("Gateway accepted (attempt {attempt}/{max_attempts})"));
-                        accepted = true;
-                        break;
-                    } else if (msg.contains("too recent") || msg.contains("stored block hash: 0"))
-                        && attempt < max_attempts
-                    {
-                        info!("  Attempt {attempt}/{max_attempts}: gateway not ready, waiting 10s...");
-                        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                    } else {
-                        info!("  Response: {}", serde_json::to_string_pretty(&body)?);
-                        fail(&format!("Gateway rejected: code={code}"));
-                        break;
-                    }
+            match rpc.add_invoke_transaction(invoke_tx.clone()).await {
+                Ok(accepted_tx_hash) => {
+                    pass(&format!(
+                        "RPC accepted (attempt {attempt}/{max_attempts}): {accepted_tx_hash}"
+                    ));
+                    rpc_tx_hash = Some(accepted_tx_hash);
+                    break;
+                }
+                Err(snip36_core::rpc::RpcError::JsonRpc(msg)) if attempt < max_attempts => {
+                    info!("  Attempt {attempt}/{max_attempts}: RPC error, waiting 10s... ({msg})");
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
                 }
                 Err(e) => {
-                    fail(&format!("Gateway request failed: {e}"));
+                    fail(&format!("RPC submission failed: {e}"));
                     break;
                 }
             }
         }
 
-        if !accepted {
-            bail!("gateway submission failed");
-        }
+        let Some(rpc_tx_hash) = rpc_tx_hash else {
+            bail!("RPC submission failed");
+        };
 
-        let tx_hash_hex = format!("{:#x}", tx_hash);
-        info!("  Waiting for tx {tx_hash_hex} to be included...");
+        info!("  Waiting for tx {rpc_tx_hash} to be included...");
 
-        match rpc.wait_for_tx(&tx_hash_hex, 180, 5).await {
+        match rpc.wait_for_tx(&rpc_tx_hash, 180, 5).await {
             Ok(receipt) => {
                 let bn = snip36_core::rpc::receipt_block_number(&receipt).unwrap_or(0);
                 pass(&format!("Tx included in block {bn}"));

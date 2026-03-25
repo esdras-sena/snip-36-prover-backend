@@ -24,12 +24,14 @@ pub struct SubmitProofRequest {
 pub struct SubmitProofResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tx_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_tx_hash: Option<String>,
     pub output: String,
 }
 
 /// POST /api/submit-proof
 ///
-/// Sign and submit the proof-bearing transaction to the privacy gateway.
+/// Sign and submit the proof-bearing transaction via RPC.
 pub async fn submit_proof(
     State(state): State<Arc<AppState>>,
     Json(req): Json<SubmitProofRequest>,
@@ -106,9 +108,10 @@ pub async fn submit_proof(
         .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
     let private_key = felt_from_hex(&state.config.private_key)
         .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))?;
-    let chain_id = state.config.chain_id_felt().map_err(|e| {
-        error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
-    })?;
+    let chain_id = state
+        .config
+        .chain_id_felt()
+        .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // Get nonce for the master account
     let nonce = state
@@ -126,65 +129,35 @@ pub async fn submit_proof(
         nonce: Felt::from(nonce),
         chain_id,
         resource_bounds: ResourceBounds::playground(),
-        gateway_url: state.config.gateway_url.clone(),
     };
 
-    let (tx_hash, payload) = sign_and_build_payload(&params)
+    let (local_tx_hash, invoke_tx) = sign_and_build_payload(&params)
         .map_err(|e| error_response(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let tx_hash_hex = format!("{:#x}", tx_hash);
-    info!(tx_hash = %tx_hash_hex, "Submitting proof to gateway");
+    let local_tx_hash_hex = format!("{:#x}", local_tx_hash);
+    info!(local_tx_hash = %local_tx_hash_hex, "Submitting proof via RPC");
 
-    // Submit to gateway via HTTP POST
-    let gateway_url = format!(
-        "{}/gateway/add_transaction",
-        state.config.gateway_url.trim_end_matches('/')
-    );
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(&gateway_url)
-        .json(&payload)
-        .send()
+    // Submit via starknet_addInvokeTransaction
+    let rpc_tx_hash = state
+        .rpc
+        .add_invoke_transaction(invoke_tx)
         .await
         .map_err(|e| {
             error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Gateway request failed: {e}"),
+                StatusCode::BAD_GATEWAY,
+                &format!("RPC submission failed: {e}"),
             )
         })?;
 
-    let status = resp.status();
-    let resp_text = resp.text().await.map_err(|e| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Failed to read gateway response: {e}"),
-        )
-    })?;
-
-    info!(status = %status, response = %resp_text, "Gateway response");
-
-    if !status.is_success() {
-        return Err(error_response(
-            StatusCode::BAD_GATEWAY,
-            &format!("Gateway rejected transaction (HTTP {status}): {resp_text}"),
-        ));
-    }
-
-    // Verify gateway accepted the transaction
-    if let Ok(resp_json) = serde_json::from_str::<serde_json::Value>(&resp_text) {
-        if let Some(code) = resp_json.get("code").and_then(|c| c.as_str()) {
-            if code != "TRANSACTION_RECEIVED" {
-                return Err(error_response(
-                    StatusCode::BAD_GATEWAY,
-                    &format!("Gateway rejected transaction (code={code}): {resp_text}"),
-                ));
-            }
-        }
-    }
+    info!(
+        local_tx_hash = %local_tx_hash_hex,
+        rpc_tx_hash = %rpc_tx_hash,
+        "RPC accepted transaction"
+    );
 
     Ok(Json(SubmitProofResponse {
-        tx_hash: Some(tx_hash_hex),
-        output: resp_text,
+        tx_hash: Some(rpc_tx_hash.clone()),
+        local_tx_hash: Some(local_tx_hash_hex),
+        output: format!("{{\"transaction_hash\":\"{rpc_tx_hash}\"}}"),
     }))
 }

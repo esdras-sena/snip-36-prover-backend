@@ -10,7 +10,7 @@ use tracing::{debug, error, info};
 use snip36_core::Config;
 
 const PROVING_UTILS_VERSION: &str = "main";
-const SEQUENCER_TAG: &str = "PRIVACY-0.14.2-RC.1";
+const SEQUENCER_TAG: &str = "PRIVACY-0.14.2-RC.2";
 const STWO_NIGHTLY: &str = "nightly-2025-07-14";
 const RUNNER_PACKAGE: &str = "starknet_transaction_prover";
 const RUNNER_BINARY: &str = "starknet_transaction_prover";
@@ -34,8 +34,8 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
             rpc_url: String::new(),
             account_address: String::new(),
             private_key: String::new(),
-            chain_id: "SN_INTEGRATION_SEPOLIA".into(),
-            gateway_url: snip36_core::types::DEFAULT_GATEWAY_URL.into(),
+            chain_id: "SN_SEPOLIA".into(),
+            gateway_url: None,
             output_dir: project_dir.join("output"),
             deps_dir: project_dir.join("deps"),
             project_dir,
