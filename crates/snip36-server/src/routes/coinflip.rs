@@ -200,8 +200,9 @@ pub async fn commit_bet(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CommitRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
-    // Lock the seed at the current block
-    let seed_block = state
+    // Lock the seed at the current block, but never before the deploy block
+    // (the contract must exist at the reference block for the virtual OS).
+    let current_block = state
         .rpc
         .block_number()
         .await
@@ -212,6 +213,13 @@ pub async fn commit_bet(
                 &format!("Failed to get block number: {e}"),
             )
         })?;
+
+    let deploy_block = {
+        let lock = state.coinflip.read().await;
+        lock.as_ref().map(|d| d.deploy_block).unwrap_or(0)
+    };
+
+    let seed_block = current_block.max(deploy_block);
 
     let session_id = uuid::Uuid::new_v4().to_string();
 
@@ -654,7 +662,6 @@ pub async fn play_coinflip(
             nonce: nonce_felt,
             chain_id,
             resource_bounds: ResourceBounds::default(),
-            gateway_url: state.config.gateway_url.clone(),
         };
 
         let (gw_tx_hash, payload) = match sign_and_build_payload(&params) {
@@ -668,7 +675,7 @@ pub async fn play_coinflip(
         let gw_tx_hash_hex = format!("{:#x}", gw_tx_hash);
         let submit_url = format!(
             "{}/gateway/add_transaction",
-            state.config.gateway_url.trim_end_matches('/')
+            state.config.gateway_url.as_deref().unwrap_or("").trim_end_matches('/')
         );
 
         send(

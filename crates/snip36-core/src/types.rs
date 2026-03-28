@@ -92,6 +92,24 @@ impl ResourceBounds {
             },
         })
     }
+
+    /// Format for the Starknet gateway `resource_bounds` field (uppercase keys).
+    pub fn to_gateway_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "L1_GAS": {
+                "max_amount": format!("{:#x}", self.l1_gas.max_amount),
+                "max_price_per_unit": format!("{:#x}", self.l1_gas.max_price_per_unit),
+            },
+            "L2_GAS": {
+                "max_amount": format!("{:#x}", self.l2_gas.max_amount),
+                "max_price_per_unit": format!("{:#x}", self.l2_gas.max_price_per_unit),
+            },
+            "L1_DATA_GAS": {
+                "max_amount": format!("{:#x}", self.l1_data_gas.max_amount),
+                "max_price_per_unit": format!("{:#x}", self.l1_data_gas.max_price_per_unit),
+            },
+        })
+    }
 }
 
 /// Proof data returned by the prover.

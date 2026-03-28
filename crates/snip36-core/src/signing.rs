@@ -189,12 +189,12 @@ pub fn sign_and_build_payload(
         .collect();
 
     let payload = serde_json::json!({
-        "type": "INVOKE",
+        "type": "INVOKE_FUNCTION",
         "version": "0x3",
         "sender_address": format!("{:#x}", params.sender_address),
         "calldata": calldata_hex,
         "nonce": format!("{:#x}", params.nonce),
-        "resource_bounds": params.resource_bounds.to_rpc_json(),
+        "resource_bounds": params.resource_bounds.to_gateway_json(),
         "tip": "0x0",
         "paymaster_data": [],
         "account_deployment_data": [],
