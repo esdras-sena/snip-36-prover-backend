@@ -8,7 +8,7 @@ use tracing::info;
 use snip36_core::proof::parse_proof_facts_json;
 use snip36_core::rpc::StarknetRpc;
 use snip36_core::signing::{felt_from_hex, sign_and_build_payload};
-use snip36_core::types::{ResourceBounds, SubmitParams};
+use snip36_core::types::SubmitParams;
 use snip36_core::Config;
 
 #[derive(Args)]
@@ -76,7 +76,7 @@ pub async fn run(args: SubmitArgs, env_file: Option<&std::path::Path>) -> Result
         felt_from_hex(&config.private_key).map_err(|e| eyre::eyre!(e))?;
     let chain_id = config.chain_id_felt()?;
 
-    let resource_bounds = ResourceBounds::default();
+    let resource_bounds = rpc.resource_bounds().await?;
 
     let params = SubmitParams {
         sender_address,

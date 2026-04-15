@@ -619,7 +619,13 @@ pub async fn prove_block(
                 return;
             }
         };
-        let resource_bounds = ResourceBounds::default();
+        let resource_bounds = match state.rpc.resource_bounds().await {
+            Ok(rb) => rb,
+            Err(e) => {
+                send("error", &format!("Failed to fetch gas prices: {e}")).await;
+                return;
+            }
+        };
 
         // Get nonce at reference_block so the tx is valid for the state being proven,
         // rather than at `latest` which may have been bumped by other sessions/txs.
@@ -859,7 +865,13 @@ pub async fn prove_block(
             proof_facts,
             nonce: nonce_felt,
             chain_id,
-            resource_bounds: ResourceBounds::default(),
+            resource_bounds: match state.rpc.resource_bounds().await {
+                Ok(rb) => rb,
+                Err(e) => {
+                    send("error", &format!("Failed to fetch gas prices: {e}")).await;
+                    return;
+                }
+            },
         };
 
         let (local_tx_hash, invoke_tx) = match sign_and_build_payload(&params) {

@@ -585,7 +585,7 @@ pub async fn run(args: E2eCoinflipArgs, env_file: Option<&std::path::Path>) -> R
             proof_facts,
             nonce: nonce_felt,
             chain_id,
-            resource_bounds: ResourceBounds::default(),
+            resource_bounds: rpc.resource_bounds().await?,
         };
 
         let (local_tx_hash, invoke_tx) =

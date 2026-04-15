@@ -663,7 +663,13 @@ pub async fn play_coinflip(
             proof_facts,
             nonce: nonce_felt,
             chain_id,
-            resource_bounds: ResourceBounds::default(),
+            resource_bounds: match state.app.rpc.resource_bounds().await {
+                Ok(rb) => rb,
+                Err(e) => {
+                    send("error", &format!("Failed to fetch gas prices: {e}")).await;
+                    return;
+                }
+            },
         };
 
         let (gw_tx_hash, payload) = match sign_and_build_payload(&params) {

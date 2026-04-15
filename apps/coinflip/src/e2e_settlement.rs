@@ -401,7 +401,7 @@ pub async fn run(args: E2eSettlementArgs, env_file: Option<&std::path::Path>) ->
             proof_facts,
             nonce: nonce_felt,
             chain_id,
-            resource_bounds: ResourceBounds::default(),
+            resource_bounds: rpc.resource_bounds().await?,
         };
 
         let (tx_hash, invoke_tx) =

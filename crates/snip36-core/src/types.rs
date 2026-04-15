@@ -16,15 +16,13 @@ pub struct ResourceBounds {
     pub l1_data_gas: ResourceBound,
 }
 
-/// ~1 quadrillion wei — safe ceiling for Sepolia gas price spikes.
-const SEPOLIA_GAS_PRICE_CEIL: u128 = 0x38d7ea4c68000;
-
-impl Default for ResourceBounds {
-    fn default() -> Self {
+impl ResourceBounds {
+    /// Build resource bounds from live gas prices with a 2x safety multiplier.
+    pub fn from_prices(l1_gas_price: u128, l1_data_gas_price: u128) -> Self {
         Self {
             l1_gas: ResourceBound {
                 max_amount: 0x10000,
-                max_price_per_unit: SEPOLIA_GAS_PRICE_CEIL,
+                max_price_per_unit: l1_gas_price.saturating_mul(2),
             },
             l2_gas: ResourceBound {
                 max_amount: 0x7000000,
@@ -32,13 +30,11 @@ impl Default for ResourceBounds {
             },
             l1_data_gas: ResourceBound {
                 max_amount: 0x1b0,
-                max_price_per_unit: SEPOLIA_GAS_PRICE_CEIL,
+                max_price_per_unit: l1_data_gas_price.saturating_mul(2),
             },
         }
     }
-}
 
-impl ResourceBounds {
     /// Resource bounds for virtual OS proving: enough gas for execution, zero price (no fee).
     pub fn zero_fee() -> Self {
         Self {

@@ -1,5 +1,7 @@
 use serde_json::Value;
-use tracing::debug;
+use tracing::{debug, info};
+
+use crate::types::ResourceBounds;
 
 /// Starknet JSON-RPC client.
 #[derive(Debug, Clone)]
@@ -60,6 +62,39 @@ impl StarknetRpc {
         resp.get("result")
             .cloned()
             .ok_or_else(|| RpcError::Unexpected(resp.to_string()))
+    }
+
+    /// Fetch current L1 gas and L1 data gas prices (in FRI) from the pending block header.
+    ///
+    /// Returns `(l1_gas_price, l1_data_gas_price)` as u128.
+    pub async fn get_gas_prices(&self) -> Result<(u128, u128), RpcError> {
+        let result = self
+            .call(
+                "starknet_getBlockWithTxHashes",
+                serde_json::json!({ "block_id": "pending" }),
+            )
+            .await?;
+
+        let parse_price = |key: &str| -> Result<u128, RpcError> {
+            let hex = result
+                .get(key)
+                .and_then(|v| v.get("price_in_fri"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    RpcError::Unexpected(format!("missing {key}.price_in_fri in block header"))
+                })?;
+            u128::from_str_radix(hex.trim_start_matches("0x"), 16)
+                .map_err(|e| RpcError::Unexpected(format!("invalid {key} hex '{hex}': {e}")))
+        };
+
+        Ok((parse_price("l1_gas_price")?, parse_price("l1_data_gas_price")?))
+    }
+
+    /// Fetch live gas prices and return resource bounds with a 2x safety multiplier.
+    pub async fn resource_bounds(&self) -> Result<ResourceBounds, RpcError> {
+        let (l1, l1_data) = self.get_gas_prices().await?;
+        info!("  Live gas prices: l1={l1}, l1_data={l1_data}");
+        Ok(ResourceBounds::from_prices(l1, l1_data))
     }
 
     /// Get the current block number.
