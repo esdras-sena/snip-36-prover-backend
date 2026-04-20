@@ -67,10 +67,20 @@ cp .env.example .env
 ```
 
 Required variables:
-- `STARKNET_RPC_URL` — JSON-RPC endpoint (e.g. Alchemy)
+- `STARKNET_RPC_URL` — JSON-RPC endpoint (Alchemy, Dwellir, etc., spec v0.8+)
 - `STARKNET_ACCOUNT_ADDRESS` — Sender account (hex)
 - `STARKNET_PRIVATE_KEY` — Signing key (hex)
-- `STARKNET_GATEWAY_URL` — Sequencer gateway for proof submission (e.g. `https://alpha-sepolia.starknet.io`). Required because RPC nodes (pathfinder) don't yet support compressed proofs.
+- `STARKNET_GATEWAY_URL` — Sequencer gateway for proof submission
+  (`https://alpha-sepolia.starknet.io` or `https://alpha-mainnet.starknet.io`).
+  Required because RPC nodes don't yet support compressed proofs.
+
+Optional:
+- `STARKNET_CHAIN_ID` — `SN_SEPOLIA` (default) or `SN_MAIN`. Must match the
+  network of your RPC + gateway — signatures are computed over this chain ID,
+  so a mismatch produces `Account: invalid signature`.
+- `PROVER_URL` — remote prover JSON-RPC endpoint. If set, `snip36` skips the
+  local `starknet_os_runner` and sends `starknet_proveTransaction` to this URL
+  instead.
 
 ### 4. Run health check
 
@@ -81,8 +91,23 @@ snip36 health
 ### 5. Run the E2E test
 
 ```bash
-snip36 e2e
+snip36 e2e                           # counter
+snip36 e2e-messages                  # L2→L1 messages
+snip36 --env-file .env.mainnet e2e   # run the same flow on mainnet
 ```
+
+## Networks
+
+The default CI schedule runs against sepolia; mainnet runs are opt-in via
+GitHub `workflow_dispatch` (pick `mainnet` from the `network` input). The CI
+reads `MAINNET_*` secret equivalents (`MAINNET_STARKNET_RPC_URL`,
+`MAINNET_STARKNET_ACCOUNT_ADDRESS`, `MAINNET_STARKNET_PRIVATE_KEY`,
+`MAINNET_STARKNET_GATEWAY_URL`) and sets `STARKNET_CHAIN_ID=SN_MAIN` for the
+duration of the job.
+
+For a fresh mainnet account, `scripts/deploy_mainnet_account.py` does a
+counterfactual OZ-account deploy using the project's pinned class hash
+(`sncast account deploy` pins a different OZ class and cannot be used).
 
 ## CLI Reference
 
