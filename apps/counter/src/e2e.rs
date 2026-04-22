@@ -176,6 +176,7 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             "oz",
             "--url",
             &config.rpc_url,
+            "--silent",
         ])
         .output()
         .await
