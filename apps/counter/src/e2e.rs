@@ -775,10 +775,25 @@ async fn check_prereqs(config: &Config, require_local_prover: bool) -> Result<()
 }
 
 async fn read_counter(rpc: &StarknetRpc, contract_address: &str) -> Option<u64> {
-    let result = rpc
+    let result = match rpc
         .starknet_call(contract_address, GET_COUNTER_SELECTOR, &[])
         .await
-        .ok()?;
-    let hex = result.first()?;
-    u64::from_str_radix(hex.trim_start_matches("0x"), 16).ok()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            error!("  read_counter RPC call failed: {e}");
+            return None;
+        }
+    };
+    let Some(hex) = result.first() else {
+        error!("  read_counter got empty result: {result:?}");
+        return None;
+    };
+    match u64::from_str_radix(hex.trim_start_matches("0x"), 16) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            error!("  read_counter hex parse failed for {hex:?}: {e}");
+            None
+        }
+    }
 }
