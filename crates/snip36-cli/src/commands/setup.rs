@@ -9,11 +9,15 @@ use tracing::{debug, error, info};
 
 use snip36_core::Config;
 
-const PROVING_UTILS_VERSION: &str = "main";
+// When bumping this, regenerate vendor/proving-utils.Cargo.lock from the new commit.
+const PROVING_UTILS_VERSION: &str = "6f12ca27842b3f93078830863b4582d5af8a3339";
 const SEQUENCER_TAG: &str = "PRIVACY-0.14.2-RC.3";
 const STWO_NIGHTLY: &str = "nightly-2025-07-14";
 const RUNNER_PACKAGE: &str = "starknet_transaction_prover";
 const RUNNER_BINARY: &str = "starknet_transaction_prover";
+
+const PROVING_UTILS_LOCKFILE: &[u8] =
+    include_bytes!("../../../../vendor/proving-utils.Cargo.lock");
 
 #[derive(Args)]
 pub struct SetupArgs {
@@ -76,6 +80,8 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
         .await?;
     }
 
+    run_cmd_in("git", &["fetch", "--quiet", "origin"], &proving_utils_dir).await?;
+
     info!("  Checking out {PROVING_UTILS_VERSION}...");
     run_cmd_in(
         "git",
@@ -83,6 +89,9 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
         &proving_utils_dir,
     )
     .await?;
+
+    // Upstream gitignores Cargo.lock; write our vendored one for reproducible builds.
+    tokio::fs::write(proving_utils_dir.join("Cargo.lock"), PROVING_UTILS_LOCKFILE).await?;
 
     // Install the Rust nightly from proving-utils
     let toolchain_file = proving_utils_dir.join("rust-toolchain.toml");
@@ -205,6 +214,7 @@ pub async fn run(args: SetupArgs, env_file: Option<&std::path::Path>) -> Result<
                 &format!("+{STWO_NIGHTLY}"),
                 "build",
                 "--release",
+                "--locked",
                 "--manifest-path",
                 &proving_utils_dir.join("Cargo.toml").to_string_lossy(),
                 "-p",
