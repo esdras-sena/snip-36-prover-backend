@@ -1,0 +1,59 @@
+name: Watch starknet-rust types-core pin
+
+# Monitors software-mansion/starknet-rust's workspace pin on starknet-types-core.
+# While upstream pins 0.2.x, our Cargo.toml can't move past 0.2.x either (see
+# the ignore rule in .github/dependabot.yml). When upstream bumps the pin, this
+# job opens a single tracking issue so we remember to remove the ignore rule.
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Mondays 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check upstream pin and open an issue if changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          url="https://raw.githubusercontent.com/software-mansion/starknet-rust/master/Cargo.toml"
+          toml=$(curl -fsSL "$url")
+
+          pin=$(printf '%s\n' "$toml" \
+            | awk '/^starknet-types-core[[:space:]]*=/ {print; exit}' \
+            | grep -Eo '"[^"]+"' \
+            | head -1 \
+            | tr -d '"')
+
+          title="Remove starknet-types-core ignore rule from dependabot.yml"
+
+          detected="$(date -u +'%Y-%m-%d %H:%M UTC')"
+          if [ -z "$pin" ]; then
+            echo "Could not parse starknet-types-core pin — alerting."
+            body=$'Could not find a `starknet-types-core` entry in upstream Cargo.toml (workspace dep may have been renamed or restructured). Manual check needed.\n\nLast detected: '"$detected"
+          elif echo "$pin" | grep -Eq '^=?0\.2\.'; then
+            echo "Still pinned at 0.2.x ($pin) — nothing to do."
+            exit 0
+          else
+            echo "Upstream pin changed to $pin — alerting."
+            body=$'software-mansion/starknet-rust now pins `starknet-types-core = "'"$pin"$'"`.\n\nRemove the `starknet-types-core` ignore entry from `.github/dependabot.yml` so dependabot will propose the coordinated bump on its next run.\n\nLast detected: '"$detected"
+          fi
+
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "in:title \"$title\"" --json number --jq 'length')
+          if [ "$existing" -gt 0 ]; then
+            echo "Issue already open — leaving it."
+            exit 0
+          fi
+
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "$title" \
+            --body "$body"
