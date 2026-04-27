@@ -1,6 +1,7 @@
 pub mod deploy;
 pub mod fund;
 pub mod prove;
+pub mod prove_and_submit;
 pub mod prove_block;
 pub mod read;
 
@@ -21,5 +22,6 @@ pub fn generic_routes() -> Router<Arc<AppState>> {
         .route("/api/fund", post(fund::fund_account))
         .route("/api/deploy-account", post(deploy::deploy_account))
         .route("/api/prove/{session_id}", get(prove::prove_transaction))
+        .route("/api/prove-and-submit", post(prove_and_submit::prove_and_submit))
         .route("/api/nonce/{address}", get(read::get_nonce))
 }
