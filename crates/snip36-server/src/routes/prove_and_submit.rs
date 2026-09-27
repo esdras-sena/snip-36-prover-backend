@@ -224,6 +224,8 @@ pub async fn prove_and_submit(
         )
         .await;
 
+        let prove_start = std::time::Instant::now();
+
         let snip36_bin = find_snip36_bin();
         let mut prove_args = vec![
             "prove".to_string(),
@@ -302,11 +304,30 @@ pub async fn prove_and_submit(
             return;
         }
 
+        let prove_elapsed = prove_start.elapsed();
+        let proof_duration_ms = prove_elapsed.as_millis() as u64;
+
         let proof_size = tokio::fs::metadata(&proof_path)
             .await
             .map(|m| m.len())
             .unwrap_or(0);
-        send("log", format!("Proof generated ({proof_size} bytes)")).await;
+        send(
+            "log",
+            format!(
+                "Proof generated ({proof_size} bytes) in {:.2}s",
+                prove_elapsed.as_secs_f64()
+            ),
+        )
+        .await;
+        send(
+            "proof_duration",
+            serde_json::json!({
+                "duration_ms": proof_duration_ms,
+                "duration_secs": prove_elapsed.as_secs_f64(),
+            })
+            .to_string(),
+        )
+        .await;
 
         // -- Phase 3: read proof + proof_facts --
         let proof_b64 = match tokio::fs::read_to_string(&proof_path).await {
@@ -377,22 +398,52 @@ pub async fn prove_and_submit(
         )
         .await;
 
-        let rpc_tx_hash = match state.rpc.add_invoke_transaction(invoke_tx).await {
-            Ok(h) => h,
-            Err(e) => {
-                send("error", format!("RPC submission failed: {e}")).await;
-                return;
+        let submitted_tx_hash = if let Some(gw_url) = state.config.gateway_url.as_deref() {
+            let submit_url = format!("{}/gateway/add_transaction", gw_url.trim_end_matches('/'));
+            let client = reqwest::Client::new();
+            match client
+                .post(&submit_url)
+                .header("Content-Type", "application/json")
+                .json(&invoke_tx)
+                .timeout(std::time::Duration::from_secs(120))
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                    let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                    if code == "TRANSACTION_RECEIVED" {
+                        local_tx_hash_hex.clone()
+                    } else {
+                        send("error", format!("Gateway rejected: {body}")).await;
+                        return;
+                    }
+                }
+                Err(e) => {
+                    send("error", format!("Gateway request failed: {e}")).await;
+                    return;
+                }
+            }
+        } else {
+            match state.rpc.add_invoke_transaction(invoke_tx).await {
+                Ok(h) => h,
+                Err(e) => {
+                    send("error", format!("RPC submission failed: {e}")).await;
+                    return;
+                }
             }
         };
 
         send(
             "complete",
             serde_json::json!({
-                "tx_hash": rpc_tx_hash,
+                "tx_hash": submitted_tx_hash,
                 "local_tx_hash": local_tx_hash_hex,
                 "reference_block": reference_block,
                 "proof_size": proof_size,
                 "proof_file": proof_path.to_string_lossy(),
+                "proof_duration_ms": proof_duration_ms,
+                "proof_duration_secs": prove_elapsed.as_secs_f64(),
             })
             .to_string(),
         )

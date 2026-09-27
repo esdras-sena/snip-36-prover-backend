@@ -468,15 +468,79 @@ pub async fn run(args: E2eArgs, env_file: Option<&std::path::Path>) -> Result<()
             prove_args.push(config.strk_token.clone());
         }
 
-        let prove_status = tokio::process::Command::new(&current_exe)
+        let prove_start = std::time::Instant::now();
+        let mut prove_child = tokio::process::Command::new(&current_exe)
             .args(&prove_args)
-            .status()
+            .spawn()
+            .wrap_err("failed to spawn prove command")?;
+
+        // Sample RSS across the prover's whole descendant tree (snip36 +
+        // starknet_os_runner + any others), summing current VmRSS at each
+        // poll and tracking the max sum. VmHWM per-process can't be summed
+        // because peaks may happen at different times.
+        let prover_pid = prove_child.id();
+        let peak_rss_kb = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let poll_handle = if let Some(pid) = prover_pid {
+            let peak = std::sync::Arc::clone(&peak_rss_kb);
+            Some(tokio::spawn(async move {
+                loop {
+                    let mut tree_rss_kb: u64 = 0;
+                    let mut any_alive = false;
+                    let mut stack = vec![pid];
+                    while let Some(p) = stack.pop() {
+                        let status_path = format!("/proc/{p}/status");
+                        if let Ok(contents) = tokio::fs::read_to_string(&status_path).await {
+                            any_alive = true;
+                            for line in contents.lines() {
+                                if let Some(rest) = line.strip_prefix("VmRSS:") {
+                                    if let Some(num) = rest.split_whitespace().next() {
+                                        if let Ok(kb) = num.parse::<u64>() {
+                                            tree_rss_kb += kb;
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        let children_path = format!("/proc/{p}/task/{p}/children");
+                        if let Ok(contents) = tokio::fs::read_to_string(&children_path).await {
+                            for tok in contents.split_whitespace() {
+                                if let Ok(child_pid) = tok.parse::<u32>() {
+                                    stack.push(child_pid);
+                                }
+                            }
+                        }
+                    }
+                    if !any_alive {
+                        break;
+                    }
+                    peak.fetch_max(tree_rss_kb, std::sync::atomic::Ordering::Relaxed);
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                }
+            }))
+        } else {
+            None
+        };
+
+        let prove_status = prove_child
+            .wait()
             .await
-            .wrap_err("failed to run prove command")?;
+            .wrap_err("failed to wait for prove command")?;
+        let prove_elapsed = prove_start.elapsed();
+        if let Some(h) = poll_handle {
+            let _ = h.await;
+        }
+        let peak_rss_mb =
+            peak_rss_kb.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1024.0;
 
         if prove_status.success() && proof_path.exists() {
             let metadata = tokio::fs::metadata(&proof_path).await?;
-            pass(&format!("Proof generated ({} bytes)", metadata.len()));
+            pass(&format!(
+                "Proof generated ({} bytes) in {:.2}s, peak RSS {:.1} MB",
+                metadata.len(),
+                prove_elapsed.as_secs_f64(),
+                peak_rss_mb
+            ));
         } else {
             fail("Proof generation failed");
             bail!("proving failed for block {block_idx}");

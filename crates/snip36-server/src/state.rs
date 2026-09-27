@@ -2,7 +2,8 @@ use dashmap::DashMap;
 use snip36_core::config::Config;
 use snip36_core::rpc::StarknetRpc;
 use snip36_core::types::Session;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
+use std::sync::Arc;
 
 /// Shared application state for generic SNIP-36 routes.
 ///
@@ -14,6 +15,22 @@ pub struct AppState {
     pub sessions: DashMap<String, Session>,
     /// Mutex to serialize sncast invocations that share the master account nonce.
     pub sncast_lock: Mutex<()>,
+    /// Caps concurrent proving. A single proof holds ~15.5 GB resident, so a box
+    /// (or Fargate task) that oversubscribes this does not run two proofs twice
+    /// as slowly — it thrashes and BOTH fail, including the one already running.
+    /// Callers beyond the limit wait here rather than being rejected.
+    /// Sized by SNIP36_MAX_CONCURRENT_PROOFS (default 1).
+    pub proof_slots: Arc<Semaphore>,
+}
+
+/// How many proofs may run at once in this process. Keep it matched to the
+/// memory actually available: 15.5 GB per proof is the measured working set.
+fn max_concurrent_proofs() -> usize {
+    std::env::var("SNIP36_MAX_CONCURRENT_PROOFS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(1)
 }
 
 impl AppState {
@@ -24,6 +41,7 @@ impl AppState {
             rpc,
             sessions: DashMap::new(),
             sncast_lock: Mutex::new(()),
+            proof_slots: Arc::new(Semaphore::new(max_concurrent_proofs())),
         }
     }
 

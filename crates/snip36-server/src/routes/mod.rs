@@ -4,6 +4,7 @@ pub mod prove;
 pub mod prove_and_submit;
 pub mod prove_block;
 pub mod read;
+pub mod veil;
 
 use std::sync::Arc;
 

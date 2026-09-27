@@ -43,9 +43,13 @@ pub enum ProveMode {
         #[arg(long)]
         prover_url: Option<String>,
 
-        /// Port for local runner server
-        #[arg(long, default_value_t = 9900)]
-        port: u16,
+        /// Port for local runner server. Omitted: use 9900, or a free
+        /// ephemeral port if 9900 is held (AWS Lambda reuses an execution
+        /// environment across invocations, so a runner orphaned by an earlier
+        /// invocation can still own 9900). Given explicitly: use exactly that
+        /// port and fail if it is busy.
+        #[arg(long)]
+        port: Option<u16>,
 
         /// Override STRK fee token address
         #[arg(long)]
@@ -98,6 +102,9 @@ pub enum ProveMode {
         verify: bool,
     },
 }
+
+/// Default port for the local starknet_os_runner.
+const DEFAULT_RUNNER_PORT: u16 = 9900;
 
 pub async fn run(args: ProveArgs, env_file: Option<&std::path::Path>) -> Result<()> {
     match args.mode {
@@ -159,7 +166,7 @@ async fn run_virtual_os(
     rpc_url: &str,
     output: &std::path::Path,
     prover_url: Option<&str>,
-    port: u16,
+    port: Option<u16>,
     strk_fee_token: Option<&str>,
     env_file: Option<&std::path::Path>,
 ) -> Result<()> {
@@ -220,22 +227,50 @@ async fn run_virtual_os(
             );
         }
 
-        // Refuse to start if something else is already listening on our port —
-        // otherwise the client would silently reuse the stale runner and its
-        // chain_id/rpc config, which produces confusing downstream failures
-        // (e.g. `Account: invalid signature` when the stale runner is on a
-        // different chain).
-        if std::net::TcpStream::connect_timeout(
-            &format!("127.0.0.1:{port}").parse().unwrap(),
-            Duration::from_millis(200),
-        )
-        .is_ok()
-        {
-            bail!(
-                "port {port} is already in use — likely a stale starknet_os_runner from a previous \
-                 run. Kill it (`pkill -f starknet_transaction_prover`) and retry, or pass --port."
-            );
-        }
+        // Never reuse a listener we did not start: a stale runner carries its own
+        // chain_id/rpc config and produces confusing downstream failures (e.g.
+        // `Account: invalid signature` when it is on a different chain). So a
+        // busy port is always fatal *for that port* — we just pick another one
+        // when the caller did not name a specific port.
+        let busy = |p: u16| {
+            std::net::TcpStream::connect_timeout(
+                &format!("127.0.0.1:{p}").parse().unwrap(),
+                Duration::from_millis(200),
+            )
+            .is_ok()
+        };
+
+        let port: u16 = match port {
+            // Explicit --port: honour it exactly, or fail loudly.
+            Some(p) => {
+                if busy(p) {
+                    bail!(
+                        "port {p} is already in use — likely a stale starknet_os_runner from a \
+                         previous run. Kill it (`pkill -f starknet_transaction_prover`) and retry, \
+                         or pass a different --port."
+                    );
+                }
+                p
+            }
+            // Default: prefer 9900, but fall back to a free ephemeral port. On
+            // Lambda the execution environment is reused between invocations, so
+            // a runner orphaned by an earlier invocation can still hold 9900 —
+            // bailing there would wedge the container for every later request.
+            None => {
+                if busy(DEFAULT_RUNNER_PORT) {
+                    let probe = std::net::TcpListener::bind("127.0.0.1:0")
+                        .wrap_err("failed to reserve a free port for starknet_os_runner")?;
+                    let free = probe.local_addr()?.port();
+                    drop(probe);
+                    info!(
+                        "port {DEFAULT_RUNNER_PORT} is busy (stale runner?); using {free} instead"
+                    );
+                    free
+                } else {
+                    DEFAULT_RUNNER_PORT
+                }
+            }
+        };
 
         let mut cmd = tokio::process::Command::new(&runner_bin);
 
@@ -257,7 +292,11 @@ async fn run_virtual_os(
             info!("  STRK token: {strk_token}");
         }
 
-        cmd.stdout(std::process::Stdio::piped())
+        // Reap the runner when this process exits. Without this the child is
+        // orphaned and keeps its port bound, which on Lambda poisons every
+        // later invocation that reuses the same execution environment.
+        cmd.kill_on_drop(true)
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
         info!("Starting starknet_os_runner on port {port}...");

@@ -9,6 +9,10 @@ description = "Generic SNIP-36 server library — reusable routes, state, and he
 name = "snip36_server"
 path = "src/lib.rs"
 
+[[bin]]
+name = "snip36-server"
+path = "src/bin/server.rs"
+
 [dependencies]
 snip36-core = { path = "../snip36-core" }
 starknet-types-core = { workspace = true }

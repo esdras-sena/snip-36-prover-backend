@@ -29,7 +29,12 @@ impl ResourceBounds {
                 max_price_per_unit: l2_gas_price.saturating_mul(2),
             },
             l1_data_gas: ResourceBound {
-                max_amount: 0x1b0,
+                // Veil's *_settle writes far more state than the counter/messenger
+                // samples this was tuned for (notes, nullifiers, channel markers),
+                // so the old 0x1b0 (432) reverted with "Insufficient max L1DataGas:
+                // max amount: 432, actual used: 1056". max_amount is only a cap —
+                // the fee charged is for gas actually consumed — so headroom is free.
+                max_amount: 0x4000,
                 max_price_per_unit: l1_data_gas_price.saturating_mul(2),
             },
         }
@@ -43,11 +48,21 @@ impl ResourceBounds {
                 max_price_per_unit: 0,
             },
             l2_gas: ResourceBound {
-                max_amount: 0x7000000,
+                // A Veil derive authorized by an EVM wallet recovers a secp256k1
+                // key and runs Keccak-256 in Cairo (the virtual OS has no keccak
+                // syscall): about 40M L2 gas on top of the derive itself, where
+                // a Starknet account's SRC-6 check is a few million. 0x10000000
+                // (~268M) keeps a note-heavy derive clear of the old 0x7000000
+                // cap. Only a cap: the price is zero and proving cost follows the
+                // gas actually used. Stays under execute_max_sierra_gas (1.1e9).
+                max_amount: 0x10000000,
                 max_price_per_unit: 0,
             },
             l1_data_gas: ResourceBound {
-                max_amount: 0x1b0,
+                // Same headroom on the proving path: the virtual OS executes the
+                // *_derive under these bounds, and an invoke derive touches more
+                // state than the samples. Price is zero here, so this costs nothing.
+                max_amount: 0x4000,
                 max_price_per_unit: 0,
             },
         }

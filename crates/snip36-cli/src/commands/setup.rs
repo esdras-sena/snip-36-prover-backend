@@ -10,9 +10,9 @@ use tracing::{debug, error, info};
 use snip36_core::Config;
 
 // When bumping this, regenerate vendor/proving-utils.Cargo.lock from the new commit.
-const PROVING_UTILS_VERSION: &str = "6f12ca27842b3f93078830863b4582d5af8a3339";
-const SEQUENCER_TAG: &str = "PRIVACY-0.14.2-RC.3";
-const STWO_NIGHTLY: &str = "nightly-2025-07-14";
+const PROVING_UTILS_VERSION: &str = "3035dd00421daa541894297bd754db6e2787807b"; // v0.14.3-rust-bump
+const SEQUENCER_TAG: &str = "PRIVACY-0.14.3-RC.2";
+const STWO_NIGHTLY: &str = "nightly-2026-01-15"; // 1.94.0-nightly: nightly for stwo's features, >=1.94 for cairo-lang 2.19
 const RUNNER_PACKAGE: &str = "starknet_transaction_prover";
 const RUNNER_BINARY: &str = "starknet_transaction_prover";
 
