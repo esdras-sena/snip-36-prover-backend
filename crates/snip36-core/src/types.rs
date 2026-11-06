@@ -49,13 +49,14 @@ impl ResourceBounds {
             },
             l2_gas: ResourceBound {
                 // A Veil derive authorized by an EVM wallet recovers a secp256k1
-                // key and runs Keccak-256 in Cairo (the virtual OS has no keccak
-                // syscall): about 40M L2 gas on top of the derive itself, where
-                // a Starknet account's SRC-6 check is a few million. 0x10000000
-                // (~268M) keeps a note-heavy derive clear of the old 0x7000000
-                // cap. Only a cap: the price is zero and proving cost follows the
-                // gas actually used. Stays under execute_max_sierra_gas (1.1e9).
-                max_amount: 0x10000000,
+                // key and runs Keccak-256 in Cairo (about 40M L2 gas); one
+                // authorized by a Stellar wallet verifies Ed25519 in pure Cairo
+                // (alexandria_math, about 380M L2 gas measured in snforge), where
+                // a Starknet account's SRC-6 check is a few million. 0x30000000
+                // (~805M) covers the Stellar check plus a note-heavy derive.
+                // Only a cap: the price is zero and proving cost follows the gas
+                // actually used. Stays under execute_max_sierra_gas (1.1e9).
+                max_amount: 0x30000000,
                 max_price_per_unit: 0,
             },
             l1_data_gas: ResourceBound {

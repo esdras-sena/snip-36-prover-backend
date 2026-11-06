@@ -256,7 +256,7 @@ mod tests {
         let calldata = vec![Felt::ONE];
         let chain_id = chain_id_felt("SN_SEPOLIA");
         let nonce = Felt::ZERO;
-        let bounds = ResourceBounds::default();
+        let bounds = ResourceBounds::zero_fee();
 
         let h1 = compute_invoke_v3_tx_hash(
             sender, &calldata, chain_id, nonce, Felt::ZERO, &bounds, &[], &[], 0, 0, &[],
@@ -273,7 +273,7 @@ mod tests {
         let calldata = vec![Felt::ONE];
         let chain_id = chain_id_felt("SN_SEPOLIA");
         let nonce = Felt::ZERO;
-        let bounds = ResourceBounds::default();
+        let bounds = ResourceBounds::zero_fee();
 
         let h_without = compute_invoke_v3_tx_hash(
             sender, &calldata, chain_id, nonce, Felt::ZERO, &bounds, &[], &[], 0, 0, &[],
